@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listener</title>
+<style>
+  :root { --bg:#fafaf9; --fg:#1c1917; --muted:#78716c; --accent:#2563eb; --card:#fff; --line:#e7e5e4; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161514; --fg:#f5f5f4; --muted:#a8a29e; --accent:#60a5fa; --card:#1f1e1c; --line:#2e2c2a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom: 24px; }
+  h1 { font-size: 20px; margin:0; flex:1; }
+  button { font:inherit; font-weight:600; padding:10px 20px; border-radius:999px; border:0; cursor:pointer;
+           background:var(--accent); color:#fff; }
+  button.on { background:#dc2626; }
+  #status { color:var(--muted); font-size:14px; display:flex; align-items:center; gap:8px; min-height:24px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); }
+  .on .dot, #status.on .dot { background:#dc2626; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity:.3; } }
+  #interim { min-height: 28px; color:var(--muted); font-style:italic; margin: 8px 0 20px; }
+  ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+  li { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 16px;
+       transition: opacity .3s, font-size .3s; }
+  li time { display:block; font-size:12px; color:var(--muted); }
+  li:first-child { font-size: 24px; font-weight:600; border-color: var(--accent); }
+  li:not(:first-child) { font-size: 16px; }
+  .empty { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Listener</h1>
+    <button id="toggle">Start</button>
+  </header>
+  <div id="status"><span class="dot"></span><span id="statusText">Idle</span></div>
+  <div id="interim"></div>
+  <ul id="list"><li class="empty">Press Start and say something.</li></ul>
+</main>
+<script>
+  const SILENCE_MS = 600;
+  const LANG = 'en-US'; // e.g. 'nl-NL' for Dutch
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const btn = document.getElementById('toggle');
+  const statusEl = document.getElementById('status');
+  const statusText = document.getElementById('statusText');
+  const interimEl = document.getElementById('interim');
+  const listEl = document.getElementById('list');
+
+  const items = [];
+  let listening = false;
+  let rec = null;
+  let baseIndex = 0;     // results before this index are already committed
+  let pending = '';      // text spoken since the last commit
+  let silenceTimer = null;
+
+  if (!SR) {
+    btn.disabled = true;
+    statusText.textContent = 'Speech recognition is not supported in this browser. Use Chrome, Edge or Safari.';
+  }
+
+  function render() {
+    listEl.innerHTML = '';
+    if (!items.length) {
+      listEl.innerHTML = '<li class="empty">Press Start and say something.</li>';
+      return;
+    }
+    items.forEach((it, i) => {
+      const li = document.createElement('li');
+      li.style.opacity = Math.max(0.35, 1 - i * 0.15);
+      const t = document.createElement('time');
+      t.textContent = it.time.toLocaleTimeString();
+      li.append(t, document.createTextNode(it.text));
+      listEl.append(li);
+    });
+  }
+
+  function commit() {
+    clearTimeout(silenceTimer);
+    const text = pending.trim();
+    pending = '';
+    interimEl.textContent = '';
+    if (!text) return;
+    items.unshift({ text, time: new Date() });
+    render();
+  }
+
+  function setStatus(text) {
+    statusText.textContent = text;
+    statusEl.classList.toggle('on', listening);
+  }
+
+  function startRec() {
+    rec = new SR();
+    rec.lang = LANG;
+    rec.continuous = true;
+    rec.interimResults = true;
+    baseIndex = 0;
+
+    rec.onresult = (e) => {
+      let text = '';
+      for (let i = baseIndex; i < e.results.length; i++) text += e.results[i][0].transcript;
+      pending = text;
+      interimEl.textContent = text;
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => {
+        baseIndex = e.results.length;
+        commit();
+      }, SILENCE_MS);
+    };
+
+    rec.onerror = (e) => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
+      // Anything else won't be fixed by restarting — stop instead of re-prompting in a loop.
+      stop();
+      setStatus('Stopped — speech error: "' + e.error + '"' + (e.message ? ' (' + e.message + ')' : ''));
+    };
+
+    // The browser ends sessions on its own now and then; restart while we're on.
+    rec.onend = () => {
+      commit();
+      if (listening) setTimeout(() => { if (listening) startRec(); }, 250);
+    };
+
+    rec.start();
+  }
+
+  function start() {
+    listening = true;
+    btn.textContent = 'Stop';
+    btn.classList.add('on');
+    setStatus('Listening…');
+    startRec();
+  }
+
+  function stop() {
+    listening = false;
+    btn.textContent = 'Start';
+    btn.classList.remove('on');
+    setStatus('Idle');
+    if (rec) rec.stop(); // onend commits whatever is pending
+  }
+
+  btn.addEventListener('click', () => (listening ? stop() : start()));
+</script>
+</body>
+</html>
